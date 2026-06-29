@@ -1,0 +1,183 @@
+//SMART AND SAFE NAVIGATION SYSTEM//
+// A code implemented to acieve a smart car that 
+line follows
+detects obstacles on its path
+uses various trigger levels to react to the proximity of the obstacle
+keeps the car on a safe track and keeps the driver aware of the surroundings//
+ *  IR1 left  → D2
+ *  IR2 right → D12
+ *  ENA       → D6  (PWM, right motors)
+ *  ENB       → D3  (PWM, left motors)
+ *  IN1       → D8    right motor
+ *  IN2       → D9    right motor
+ *  IN3       → D10   left motor
+ *  IN4       → D11   left motor
+ *  TRIG      → D4
+ *  ECHO      → D5
+ *  Buzzer    → D13
+ *  RGB RED   → A0
+ *  RGB GREEN → A1
+ *  RGB BLUE  → A2
+ *
+ *  IR sensors: HIGH = black line detected
+ *
+ *  ALERT LEVELS:
+ *    > 40cm       → green LED solid, no buzzer, follow line
+ *    10cm – 40cm  → red LED blink + buzzer beep on/off, STOP
+ *    < 10cm       → red LED solid bright + buzzer full on, STOP
+ * ============================================================
+ */
+
+// ── Line following ──────────────────────────────────────────
+#define IR_LEFT   2
+#define IR_RIGHT  12
+#define ENA       6
+#define ENB       3
+#define IN1       8
+#define IN2       9
+#define IN3       10
+#define IN4       11
+
+#define SPEED_FULL    150 // reduced for better curve reaction
+#define SPEED_CRAWL   30  // inner wheel stops on curves for max turning
+#define SPEED_STOP    0
+
+// ── Ultrasonic ──────────────────────────────────────────────
+#define TRIG      4
+#define ECHO      5
+
+// ── RGB LED (common cathode) ────────────────────────────────
+#define LED_R     A0
+#define LED_G     A1
+#define LED_B     A2
+
+// ── Buzzer (active LOW — HIGH = silent, LOW = beep) ─────────
+#define BUZZER    13
+
+// ── Non-blocking blink timer ────────────────────────────────
+unsigned long lastBlinkTime = 0;
+bool blinkState = false;
+#define BLINK_INTERVAL 300
+
+// ────────────────────────────────────────────────────────────
+
+void driveMotors(int leftSpeed, int rightSpeed) {
+  // Right motor
+  analogWrite(ENA, rightSpeed);
+  if (rightSpeed > 0) {
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+  } else {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
+  }
+  // Left motor
+  analogWrite(ENB, leftSpeed);
+  if (leftSpeed > 0) {
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
+  } else {
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, LOW);
+  }
+}
+
+long getDistance() {
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+  long duration = pulseIn(ECHO, HIGH, 30000);
+  long cm = duration / 58;
+  return cm;
+}
+
+void setRGB(int r, int g, int b) {
+  analogWrite(LED_R, r);
+  analogWrite(LED_G, g);
+  analogWrite(LED_B, b);
+}
+
+void setup() {
+  pinMode(IR_LEFT,  INPUT);
+  pinMode(IR_RIGHT, INPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+  pinMode(LED_R, OUTPUT);
+  pinMode(LED_G, OUTPUT);
+  pinMode(LED_B, OUTPUT);
+  pinMode(BUZZER, OUTPUT);
+
+  digitalWrite(BUZZER, HIGH);   // silent on boot
+  setRGB(0, 255, 0);            // green on boot
+
+  Serial.begin(9600);
+  Serial.println("Ready!");
+  delay(1000);
+}
+
+void loop() {
+  // ── Ultrasonic read ───────────────────────────────────────
+  long dist = getDistance();
+  Serial.print("DIST: "); Serial.print(dist); Serial.print(" cm");
+
+  // ── DANGER — closer than 10cm ─────────────────────────────
+  if (dist > 0 && dist < 10) {
+    driveMotors(SPEED_STOP, SPEED_STOP);
+    setRGB(255, 0, 0);            // solid bright red
+    digitalWrite(BUZZER, LOW);    // full on
+    Serial.print("  → DANGER");
+
+  // ── WARNING — between 10cm and 40cm ──────────────────────
+  } else if (dist >= 10 && dist <= 40) {
+    driveMotors(SPEED_STOP, SPEED_STOP);
+    unsigned long now = millis();
+    if (now - lastBlinkTime >= BLINK_INTERVAL) {
+      lastBlinkTime = now;
+      blinkState = !blinkState;
+    }
+    if (blinkState) {
+      setRGB(255, 0, 0);          // red on
+      digitalWrite(BUZZER, LOW);  // buzzer on
+    } else {
+      setRGB(0, 0, 0);            // red off
+      digitalWrite(BUZZER, HIGH); // buzzer off
+    }
+    Serial.print("  → WARNING");
+
+  // ── CLEAR — beyond 40cm, follow line ─────────────────────
+  } else {
+    setRGB(0, 255, 0);            // solid green
+    digitalWrite(BUZZER, HIGH);   // silent
+
+    bool L = digitalRead(IR_LEFT);
+    bool R = digitalRead(IR_RIGHT);
+
+    Serial.print("  L: "); Serial.print(L ? "BLACK" : "white");
+    Serial.print("  R: "); Serial.print(R ? "BLACK" : "white");
+
+    if (L && R) {
+      Serial.print("  → FORWARD");
+      driveMotors(SPEED_FULL, SPEED_FULL);
+    } else if (L && !R) {
+      Serial.print("  → CURVE LEFT");
+      driveMotors(SPEED_CRAWL, SPEED_FULL);
+    } else if (!L && R) {
+      Serial.print("  → CURVE RIGHT");
+      driveMotors(SPEED_FULL, SPEED_CRAWL);
+    } else {
+      Serial.print("  → STOP");
+      driveMotors(SPEED_STOP, SPEED_STOP);
+    }
+  }
+
+  Serial.println();
+  delay(15);
+}
